@@ -13,7 +13,6 @@ Technical Analysis
 - Done
 
 - The ongoing
-  -
 
 #### Utils for technical factors:
 ```
