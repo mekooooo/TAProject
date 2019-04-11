@@ -30,7 +30,8 @@ def to_hdf(data, fname, key, string=False):
 
 def to_hdf_df(df, fname, key, string=False):
     to_hdf(df, fname, key, string=string)
-    to_hdf(df.index, fname, 'Dates', string=True)
+    to_hdf(pd.to_datetime(df.index).strftime('%Y%m%d'),
+           fname, 'Dates', string=True)
     to_hdf(df.columns, fname, 'Tickers', string=True)
 
 def from_hdf(fname, key):
