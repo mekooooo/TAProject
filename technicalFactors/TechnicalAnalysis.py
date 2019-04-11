@@ -506,7 +506,7 @@ class TechnicalAnalysis(TechnicalIndicators):
                         to_hdf_df(res.ewm(alpha=0.8, axis=0).mean(),
                               '{}/{}.h5'.format(origin.output, output_name),
                               'EMA')
-                print(f'{output_name} Done!')
+                print('{} Done!'.format(output_name))
                 return res
             return wrapper
     
