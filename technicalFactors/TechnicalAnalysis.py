@@ -22,8 +22,9 @@ def to_hdf(data, fname, key, string=False):
     if key in list(h5.keys()):
         del h5[key]
     if string:
-        h5.create_dataset(key,
-                          data=np.array(data, dtype=h5py.special_dtype(vlen=str)))
+        h5.create_dataset(key, data=np.array(np.array(data,
+                                                      dtype=np.dtype(str)), 
+    dtype=h5py.special_dtype(vlen=str)), dtype=h5py.special_dtype(vlen=str))
     else:
         h5.create_dataset(key, data=data)
     h5.close()
