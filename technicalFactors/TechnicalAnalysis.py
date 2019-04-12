@@ -11,6 +11,9 @@ import numpy as np
 import os
 import h5py
 from functools import wraps
+import warnings
+
+warnings.simplefilter('ignore', RuntimeWarning)
 
 data_dir = ''
 h5_dir = '{}'.format(data_dir)
@@ -22,8 +25,9 @@ def to_hdf(data, fname, key, string=False):
     if key in list(h5.keys()):
         del h5[key]
     if string:
-        h5.create_dataset(key,
-                          data=np.array(data, dtype=h5py.special_dtype(vlen=str)))
+        h5.create_dataset(key, data=np.array(np.array(data,
+                                                      dtype=np.dtype(str)), 
+    dtype=h5py.special_dtype(vlen=str)), dtype=h5py.special_dtype(vlen=str))
     else:
         h5.create_dataset(key, data=data)
     h5.close()
@@ -989,8 +993,7 @@ class TechnicalAnalysis(TechnicalIndicators):
         x = np.zeros([close.shape[0],lookback-long-short])
         y = np.zeros([close.shape[0],lookback-long-short])
         msk = np.zeros([close.shape[0],lookback-long-short]).astype('bool')
-        pb = ProgressBar()
-        for i in pb(range(close.shape[1])):
+        for i in range(close.shape[1]):
             if i < (long + short):
                 res.append(np.zeros(close.shape[0]))
                 continue
