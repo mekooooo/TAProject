@@ -1288,12 +1288,6 @@ class TechnicalAnalysis(TechnicalIndicators):
             axis=0).max().rank(axis=1, pct=True)
         
     @Output()
-    def Factor_GTJA_11(self):
-        return ((self.Data['Close']*2 - self.Data['Low'] - self.Data['High'])/
-                (self.Data['High'] - self.Data['Low'])*
-                self.Data['Volume']).rolling(6, axis=0).sum()
-    
-    @Output()
     def Factor_GTJA_12(self):
         return (self.Data['Open'] - self.Data['VWAP'].rolling(10,
                 axis=0).mean()).rank(axis=1, pct=True)*(-(self.Data['Close'] -
@@ -1956,7 +1950,7 @@ class TechnicalAnalysis(TechnicalIndicators):
     
     @Output()
     def Factor_GTJA_103(self):
-        return 1 - self.Data['Low'].rolling(20, axis=0).apply(self.LowDay)
+        return 1 - self.Data['Low'].rolling(20, axis=0).apply(self.LowDay)/20
     
     @Output()
     def Factor_GTJA_104(self):
@@ -1972,19 +1966,6 @@ class TechnicalAnalysis(TechnicalIndicators):
                              10))
     
     @Output()
-    def Factor_GTJA_106(self):
-        return self.Data['Close'].diff(20, axis=0)
-    
-    @Output()
-    def Factor_GTJA_107(self):
-        return -((self.Data['Open'] - 
-                  self.Data['High'].shift(axis=0)).rank(axis=1, pct=True) *
-                 (self.Data['Open'] -
-                  self.Data['Close'].shift(axis=0)).rank(axis=1, pct=True) *
-                 (self.Data['Open'] -
-                  self.Data['Low'].shift(axis=0)).rank(axis=1, pct=True))
-    
-    @Output()
     def Factor_GTJA_108(self):
         return -((self.Data['High'] -
                   self.Data['High'].rolling(2, axis=0).min()).rank(axis=1,
@@ -1993,12 +1974,6 @@ class TechnicalAnalysis(TechnicalIndicators):
                                   self.Data['Volume'].rolling(120,
                                        axis=0).mean(),
                                         6).rank(axis=1, pct=True)))
-    
-    @Output()
-    def Factor_GTJA_109(self):
-        temp = (self.Data['High'] - 
-                self.Data['Low']).ewm(alpha=0.2, axis=0).mean()
-        return temp / temp.ewm(alpha=0.2, axis=0).mean()
     
     @Output()
     def Factor_GTJA_110(self):
@@ -2016,17 +1991,6 @@ class TechnicalAnalysis(TechnicalIndicators):
                 self.Data['Volume']/(self.Data['High'] - self.Data['Low']))
         return (temp.ewm(alpha=2/11, axis=0).mean() /
                 temp.ewm(alpha=0.5, axis=0).mean())
-    
-    @Output()
-    def Factor_GTJA_112(self):
-        temp = self.Data['Close'].diff(axis=0)
-        temp1 = temp.copy()
-        temp1[temp1 < 0] = 0
-        temp1 = temp1.rolling(20, axis=0).sum()
-        temp2 = -temp.copy()
-        temp2[temp2 < 0] = 0
-        temp2 = temp2.rolling(20, axis=0).sum()
-        return (temp1 - temp2) / (temp1 + temp2)
     
     @Output()
     def Factor_GTJA_113(self):
@@ -2059,10 +2023,6 @@ class TechnicalAnalysis(TechnicalIndicators):
                 self.TSRank(self.Data['Volume'], 10),
                 7).rank(axis=1, pct=True))
         
-    @Output()
-    def Factor_GTJA_116(self):
-        return self.RegBeta(self.Data['Close'], np.arange(20)+1)
-    
     @Output()
     def Factor_GTJA_117(self):
         return (self.TSRank(self.Data['Volume'], 32) * 
