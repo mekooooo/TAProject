@@ -77,10 +77,11 @@ class TechnicalIndicators:
         self.Dates = Data['Dates']
         self.Tickers = Data['Tickers']
         
-        if 'Volume' not in Data:
-            Data['Volume'] = Data['Turnover']*Data['MV']/Data['Close']/100
+        if 'Amount' not in Data:
+            Data['Amount'] = Data['Turnover']*Data['MV']/Data['Close']/100
         
-        na_mask = ~(Data['Volume'] != 0)
+        na_mask = ~(Data['Amount'] != 0)
+        Data['Amount'][na_mask] = np.nan
         Data['Volume'][na_mask] = np.nan
         Data['Open'][na_mask] = np.nan
         Data['High'][na_mask] = np.nan
@@ -384,7 +385,7 @@ class TechnicalIndicators:
         OSC = DIF - DEM
         
         return [DIF, DEM, OSC]
-
+    
     @SkipNoTrading(window_pos=1)
     def RSI(self, window):
         """
@@ -448,9 +449,85 @@ class TechnicalIndicators:
               higher low even as prices move lower or forge a lower low.
         """
         temp = np.sign(self.Data['Close'].diff(axis=0))
-        OBV = temp * self.Data['Volume'] / self.Data['fMV'] * 10000
+        OBV = temp * self.Data['Volume']
         OBV = OBV.rolling(window, axis=0).mean()
         return OBV
+    
+    @staticmethod
+    def TSCov(df1, df2, n):
+        EX = df1.rolling(n, axis=0).mean()
+        EY = df2.rolling(n, axis=0).mean()
+        EXY = (df1*df2).rolling(n, axis=0).mean()
+        return EXY - EX*EY
+    
+    @staticmethod
+    def TSCorr(df1, df2, n):
+        EX = df1.rolling(n, axis=0).mean()
+        EY = df2.rolling(n, axis=0).mean()
+        EXY = (df1*df2).rolling(n, axis=0).mean()
+        varX = df1.rolling(n, axis=0).var()
+        varY = df2.rolling(n, axis=0).var()
+        return (EXY - EX*EY)/np.sqrt(varX*varY)*n/(n-1)
+    
+    @staticmethod
+    def TSRank(df, n):
+        return df.rolling(n, axis=0).apply(lambda x:
+            1 - x.argsort().argsort()[-1] / x.size)
+    
+    @staticmethod
+    def DecayLinear(df):
+        weights = np.arange(len(df))+1
+        return (df * weights).sum() / weights.sum()
+    
+    @staticmethod
+    def HighDay(df):
+        return len(df) - df.argmax()
+    
+    @staticmethod
+    def LowDay(df):
+        return len(df) - df.argmin()
+    
+    @staticmethod
+    def RegBeta(df1, df2):
+        n = df2.shape[0]
+        if n < df1.shape[0]:
+            def Beta(d1, d2):
+                XY = d1 * d2
+                XX = d1 ** 2
+                return ((n*XY.sum() -
+                        d2.sum() * d1.sum())/
+                (n*XX.sum() - (d1.sum())**2))
+            return df1.rolling(n).apply(lambda x: Beta(x, df2))
+        else:
+            XY = df1.mul(df2, axis=0)
+            XX = df1 ** 2
+            return (n*XY.rolling(n, axis=0).sum() -
+                    df1.rolling(n, axis=0).sum().mul(df2.rolling(n, axis=0).sum(),
+                              axis=0)).div(n*XX.rolling(n, axis=0).sum()
+                    - (df1.rolling(n, axis=0).sum())**2, axis=0)
+    
+    @staticmethod
+    def RegResid(df1, df2):
+        n = df2.shape[0]
+        if n < df1.shape[0]:
+            def Beta(d1, d2):
+                XY = d1 * d2
+                XX = d1 ** 2
+                return ((n*XY.sum() -
+                        d2.sum() * d1.sum())/
+                (n*XX.sum() - (d1.sum())**2))
+            return df1.rolling(n).apply(lambda x: Beta(x, df2))
+        else:
+            XY = df2.mul(df1, axis=0)
+            XX = df1 ** 2
+            beta = (n*XY.rolling(n, axis=0).sum() -
+                    df2.rolling(n, axis=0).sum().mul(df1.rolling(n, axis=0).sum(),
+                              axis=0)).div(n*XX.rolling(n, axis=0).sum()
+                    - (df1.rolling(n, axis=0).sum())**2, axis=0) 
+            alpha = (df2.rolling(n, axis=0).mean() -
+                     beta * df1.rolling(n, axis=0).mean())
+            return df2 - beta.mul(df1, axis=0) - alpha
+        
 
 class TechnicalAnalysis(TechnicalIndicators):
     
@@ -477,6 +554,20 @@ class TechnicalAnalysis(TechnicalIndicators):
                         '{}/fMV.h5'.format(h5_dir), 'Raw'),
                 'fTurnover': from_hdf_df(
                         '{}/fTurnover.h5'.format(h5_dir), 'Raw'),
+                'Amount': from_hdf_df(
+                        '{}/Amount.h5'.format(h5_dir), 'Raw'),
+                'Volume': from_hdf_df(
+                        '{}/Volume.h5'.format(h5_dir), 'Raw'),
+                'Index': pd.Series(from_hdf(
+                        '{}/CSI500.h5'.format(h5_dir), 'Close'),
+                        index=pd.to_datetime(from_hdf(
+                                '{}/CSI500.h5'.format(h5_dir), 'Dates'))
+                        ).reindex(pd.to_datetime(Dates)),
+                'IndexOpen': pd.Series(from_hdf(
+                        '{}/CSI500.h5'.format(h5_dir), 'Open'),
+                        index=pd.to_datetime(from_hdf(
+                                '{}/CSI500.h5'.format(h5_dir), 'Dates'))
+                        ).reindex(pd.to_datetime(Dates))
                 }
         super().__init__(Data, min_ratio)
         
@@ -498,6 +589,8 @@ class TechnicalAnalysis(TechnicalIndicators):
                 output_name += [str(int(x)) for x in param[1:]]
                 output_name = '_'.join(output_name)
                 res = func(*args, **kwargs)
+                if res is None:
+                    return res
                 if origin.output is not None:
                     if not os.path.exists(output):
                         os.makedirs(output)
@@ -990,8 +1083,7 @@ class TechnicalAnalysis(TechnicalIndicators):
         x = np.zeros([close.shape[0],lookback-long-short])
         y = np.zeros([close.shape[0],lookback-long-short])
         msk = np.zeros([close.shape[0],lookback-long-short]).astype('bool')
-        pb = ProgressBar()
-        for i in pb(range(close.shape[1])):
+        for i in range(close.shape[1]):
             if i < (long + short):
                 res.append(np.zeros(close.shape[0]))
                 continue
@@ -1123,3 +1215,1403 @@ class TechnicalAnalysis(TechnicalIndicators):
                 (self.Data['Open'].shift(-1, axis=0) -
                  self.Data['Close']).abs().rolling(rolling,axis=0).mean())
     
+    @Output()
+    def Factor_GTJA_1(self):
+        return -self.TSCorr(np.log(self.Data['Volume']).diff(axis=0).rank(
+                axis=1, pct=True), (self.Data['Close']/self.Data['Open'] -
+                                1).rank(axis=1, pct=True), 6)
+    
+    @Output()
+    def Factor_GTJA_2(self):
+        return -((self.Data['Close']*2 - self.Data['Low'] - self.Data['High'])/
+                (self.Data['High'] - self.Data['Low'])).diff(axis=0)
+    
+    @Output()
+    def Factor_GTJA_3(self):
+        delay = self.Data['Close'].shift(axis=0)
+        part1 = self.Data['Close']*(self.Data['Close'].diff(axis=0) != 0)
+        temp1 = np.minimum(self.Data['Low'], delay)
+        temp2 = np.maximum(self.Data['High'], delay)
+        part2 = temp1.where(self.Data['Close'] > delay, temp2)
+        return (part1 - part2).rolling(6, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_4(self):
+        c_mean8 = self.Data['Close'].rolling(8, axis=0).mean()
+        c_mean2 = self.Data['Close'].rolling(2, axis=0).mean()
+        c_std8 = self.Data['Close'].rolling(8, axis=0).std()
+        v_mean20 = self.Data['Volume'].rolling(20, axis=0).mean()
+        temp = pd.DataFrame(-1, index=c_mean8.index, columns=c_mean8.columns)
+        temp[(~((c_mean8 + c_std8) < c_mean2) &
+              ((c_mean2 < (c_mean8 - c_std8)) |
+                      ((self.Data['Volume'] / v_mean20) >= 1)))] = 1
+        return temp
+    
+    @Output()
+    def Factor_GTJA_5(self):
+        return -(self.TSCorr(self.TSRank(self.Data['Volume'], 5),
+                             self.TSRank(self.Data['High'], 3),
+                             5)).rolling(3, axis=0).max()     
+        
+    @Output()
+    def Factor_GTJA_6(self):
+        return -np.sign((self.Data['Open']*0.85 +
+                         self.Data['High']*0.15).diff(4, 
+                                  axis=0)).rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_7(self):
+        return ((self.Data['VWAP'] - self.Data['Close']).rolling(3, 
+                axis=0).max().rank(axis=1, pct=True) + ((self.Data['VWAP'] -
+                           self.Data['Close']).rolling(3, axis=0).min().rank(
+                                   axis=1, pct=True)) * 
+            (self.Data['Volume'].diff(3, axis=0).rank(axis=1, pct=True)))
+    
+    @Output()
+    def Factor_GTJA_8(self):
+        return -((self.Data['High'] + self.Data['Low'])*0.1 +
+                 self.Data['VWAP']*0.8).diff(4, axis=0).rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_9(self):
+        return (((self.Data['High']+self.Data['Low'])/2 -
+                 (self.Data['High'].shift(axis=0) +
+                  self.Data['Low'].shift(axis=0))/2) * 
+            (self.Data['High']-self.Data['Low']) / 
+            self.Data['Volume']).ewm(alpha=2/7, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_10(self):
+        ret = self.Data['Close'].diff(axis=0)
+        return (ret.rolling(20, axis=0).std().where(ret<0,
+                self.Data['Close'])**2).rolling(5, 
+            axis=0).max().rank(axis=1, pct=True)
+        
+    @Output()
+    def Factor_GTJA_12(self):
+        return (self.Data['Open'] - self.Data['VWAP'].rolling(10,
+                axis=0).mean()).rank(axis=1, pct=True)*(-(self.Data['Close'] -
+                            self.Data['VWAP']).abs().rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_13(self):
+        return np.sqrt(self.Data['High']*self.Data['Low']) - self.Data['VWAP']
+    
+    @Output()
+    def Factor_GTJA_14(self):
+        return self.Data['Close'].diff(5, axis=0)
+    
+    @Output()
+    def Factor_GTJA_15(self):
+        return self.Data['Open']/self.Data['Close'].shift(axis=0)
+    
+    @Output()
+    def Factor_GTJA_16(self):
+        return -self.TSCorr(self.Data['Volume'].rank(axis=1, pct=True), 
+                            self.Data['VWAP'].rank(axis=1, pct=True), 5).rank(
+                                    axis=1, pct=True).rolling(5, axis=0).max()
+    
+    @Output()
+    def Factor_GTJA_17(self):
+        return (self.Data['VWAP'] -
+                self.Data['VWAP'].rolling(15, axis=0).max()).rank(axis=1, 
+                         pct=True)**(self.Data['Close'].pct_change(5, axis=0))
+    
+    @Output()
+    def Factor_GTJA_18(self):
+        return self.Data['Close'].pct_change(5, axis=0)
+    
+    @Output()
+    def Factor_GTJA_19(self):
+        diff = self.Data['Close'].diff(axis=0)
+        div = self.Data['Close'].shift(axis=0).where(diff>=0, 
+                       self.Data['Close'])
+        return diff / div
+    
+    @Output()
+    def Factor_GTJA_20(self):
+        return self.Data['Close'].pct_change(6, axis=0)
+    
+    @Output()
+    def Factor_GTJA_21(self):
+        return self.RegBeta(self.Data['Close'], np.arange(6)+1)
+    
+    @Output()
+    def Factor_GTJA_22(self):
+        return (self.Data['Close']/self.Data['Close'].rolling(
+                6, axis=0).mean() - 1).diff(3, axis=0).ewm(
+            alpha=1/12, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_23(self):
+        temp = (self.Data['Close'].rolling(20, axis=0).std() * 
+                (self.Data['Close'].diff(axis=0)>0)).ewm(alpha=1/20,
+                axis=0).mean() 
+        return 1 - (self.Data['Close'].rolling(20, axis=0).std() * 
+                    (self.Data['Close'].diff(axis=0)<=0)).ewm(alpha=1/20,
+                    axis=0).mean() / temp 
+     
+    @Output()
+    def Factor_GTJA_24(self):
+        return self.Data['Close'].diff(5, axis=0).ewm(alpha=0.2, axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_25(self):
+        return -(self.Data['Close'].diff(7, axis=0) *
+                 (1 - (self.Data['Volume'] /
+                       self.Data['Volume'].rolling(20,
+                                axis=0).mean()).rolling(9,
+                                axis=0).apply(lambda x: 
+                                    self.DecayLinear(x)).rank(axis=1,
+                                                    pct=True))).rank(
+                           axis=1) * (1+self.Data['Close'].pct_change(
+                                   axis=0).rolling(250,
+                                         axis=0).sum().rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_26(self):
+        return (self.Data['Close'].rolling(7, axis=0).mean() -
+                self.Data['Close'] + self.TSCorr(self.Data['VWAP'],
+                         self.Data['Close'].shift(5, axis=0), 230))
+        
+    @Output()
+    def Factor_GTJA_27(self):
+        return (self.Data['Close'].pct_change(3, axis=0)*100 +
+                self.Data['Close'].pct_change(6, axis=0)*100).rolling(12,
+                         axis=0).apply(lambda x: self.DecayLinear(x))
+    
+    @Output()
+    def Factor_GTJA_28(self):
+        lmin = self.Data['Low'].rolling(9, axis=0).min()
+        return 3*((self.Data['Close'] - lmin) / 
+                  (self.Data['High'].rolling(9, axis=0).max() - lmin)*
+                  100).ewm(alpha=1/3, axis=0).mean() - 2*(
+                          (self.Data['Close'] - lmin)/
+                          (self.Data['High'].rolling(9, axis=0).max() -
+                           self.Data['Low'].rolling(9, axis=0).max())*
+                           100).ewm(alpha=1/3, axis=0).mean().ewm(
+                                   alpha=1/3, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_29(self):
+        return self.Data['Close'].pct_change(6, axis=0) * self.Data['Volume']
+    
+    @Output()
+    def Factor_GTJA_30(self):
+        pass
+    
+    @Output()
+    def Factor_GTJA_31(self):
+        return (self.Data['Close'] / 
+                self.Data['Close'].rolling(12, axis=0).mean() - 1)
+    
+    @Output()
+    def Factor_GTJA_32(self):
+        return -self.TSCorr(self.Data['High'].rank(axis=1, pct=True),
+                            self.Data['Volume'].rank(axis=1, pct=True),
+                            3).rank(axis=1, pct=True).rolling(3, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_33(self):
+        ret = self.Data['Close'].pct_change(axis=0)
+        return -(self.Data['Low'].rolling(5, axis=0).min().diff(5, axis=0) * 
+                 ((ret.rolling(240, axis=0).sum() - 
+                   ret.rolling(20, axis=0).sum()) / 220).rank(axis=1, 
+                   pct=True) * self.TSRank(self.Data['Volume'], 5))
+    
+    @Output()
+    def Factor_GTJA_34(self):
+        return (self.Data['Close'] /
+                self.Data['Close'].rolling(12, axis=1).mean())
+    
+    @Output()
+    def Factor_GTJA_35(self):
+        return np.minimum(self.Data['Open'].diff(axis=0).rolling(15,
+                          axis=0).apply(lambda x:
+                              self.DecayLinear(x)).rank(axis=1, pct=True),
+                          self.TSCorr(self.Data['Volume'],
+                                      self.Data['Open'], 17).rolling(7,
+                                               axis=0).apply(lambda x: 
+                                           self.DecayLinear(x)).rank(axis=1, 
+                                                           pct=True))
+            
+    @Output()
+    def Factor_GTJA_36(self):
+        return self.TSCorr(self.Data['Volume'].rank(axis=1, pct=True), 
+                           self.Data['VWAP'].rank(axis=1, pct=True),
+                           6).rolling(2, axis=0).sum().rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_37(self):
+        return -(self.Data['Close'].pct_change(axis=0).rolling(5, 
+                 axis=0).sum() -
+            self.Data['Open'].rolling(5, axis=0).sum()).diff(10, 
+                     axis=0).rank(axis=1, pct=True)
+        
+    @Output()
+    def Factor_GTJA_38(self):
+        return ((-self.Data['High'].diff(2, axis=0)) * 
+                (self.Data['High'].rolling(20, axis=0).mean() < 
+                 self.Data['High']))
+    
+    @Output()
+    def Factor_GTJA_39(self):
+        return (self.Data['Close'].diff(2, axis=0).rolling(8, 
+                        axis=0).apply(lambda x: 
+                            self.DecayLinear(x)).rank(axis=1, pct=True) +
+            self.TSCorr(0.3*self.Data['VWAP'] +
+                        0.7*self.Data['Open'],
+                        self.Data['Volume'].rolling(180,
+                                 axis=0).mean().rolling(37, axis=0).sum(), 
+                                 14).rolling(12, axis=0).apply(lambda x:
+                                     self.DecayLinear(x)).rank(axis=1, 
+                                                     pct=True))
+    @Output()
+    def Factor_GTJA_40(self):
+        return ((self.Data['Volume'] *
+                (self.Data['Close'].diff(axis=0)>0)).rolling(26, 
+                axis=0).sum() /
+                (self.Data['Volume'] *
+                 (self.Data['Close'].diff(axis=0)<=0)).rolling(26,
+                 axis=0).sum())
+    
+    @Output()
+    def Factor_GTJA_41(self):
+        return -self.Data['VWAP'].diff(3, axis=0).rolling(5,
+                         axis=0).max().rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_42(self):
+        return ((-self.Data['High'].rolling(10, axis=0).std().rank(axis=1,
+                 pct=True)) * self.TSCorr(self.Data['High'], 
+            self.Data['Volume'], 10))
+    
+    @Output()
+    def Factor_GTJA_43(self):
+        return (self.Data['Volume'] *
+                (2*((self.Data['Close'].diff(axis=0)>0) -
+                    0.5))).rolling(6, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_44(self):
+        return (self.TSRank(self.TSCorr(self.Data['Low'],
+                            self.Data['Volume'].rolling(10,
+                                     axis=0).mean(), 7).rolling(6,
+                                     axis=0).apply(lambda x:
+                                         self.DecayLinear(x)), 4) +
+                                self.TSRank(self.Data['VWAP'].diff(3,
+                                 axis=0).rolling(10, 
+                                 axis=0).apply(lambda x:
+                                 self.DecayLinear(x)), 15))
+    
+    @Output()
+    def Factor_GTJA_45(self):
+        return ((0.6*self.Data['Close'] +
+                 0.4*self.Data['Open']).diff(axis=0).rank(axis=1, pct=True) *
+                    self.TSCorr(self.Data['VWAP'],
+                                self.Data['Volume'].rolling(150, 
+                                         axis=0).mean(),
+                                         15).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_46(self):
+        return ((self.Data['Close'].rolling(3, axis=0).mean() +
+                 self.Data['Close'].rolling(6, axis=0).mean() +
+                 self.Data['Close'].rolling(12, axis=0).mean() +
+                 self.Data['Close'].rolling(24, axis=0).mean()) /
+                    self.Data['Close'])
+    
+    @Output()
+    def Factor_GTJA_47(self):
+        h_max = self.Data['High'].rolling(6, axis=0).max()
+        return ((h_max - self.Data['Close']) /
+                (h_max - self.Data['Low'].rolling(6, axis=0).min()) *
+                100).ewm(alpha=1/9, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_48(self):
+        diff = 2*((self.Data['Close'].diff(axis=0) > 0) - 0.5)
+        return -(diff.rolling(3, axis=0).sum().rank(axis=1, pct=True) * 
+                 self.Data['Volume'].rolling(5, axis=0).sum() / 
+                 self.Data['Volume'].rolling(20, axis=0).sum())
+    
+    @Output()
+    def Factor_GTJA_49(self):
+        diff_h = self.Data['High'].diff(axis=0)
+        diff_l = self.Data['Low'].diff(axis=0)
+        cond1 = diff_h >= diff_l
+        cond2 = diff_h <= diff_l
+        temp = np.maximum(self.Data['High'].diff(axis=0).abs(),
+                          self.Data['Low'].diff(axis=0).abs())
+        s1 = (cond1*temp).rolling(12, axis=0).sum()
+        s2 = (cond2*temp).rolling(12, axis=0).sum()
+        return s1 / (s1+s2)
+    
+    @Output()
+    def Factor_GTJA_50(self):
+        diff_h = self.Data['High'].diff(axis=0)
+        diff_l = self.Data['Low'].diff(axis=0)
+        cond1 = diff_h >= diff_l
+        cond2 = diff_h <= diff_l
+        temp = np.maximum(self.Data['High'].diff(axis=0).abs(),
+                          self.Data['Low'].diff(axis=0).abs())
+        s1 = (cond1*temp).rolling(12, axis=0).sum()
+        s2 = (cond2*temp).rolling(12, axis=0).sum()
+        return (s1-s2) / (s1+s2)
+    
+    @Output()
+    def Factor_GTJA_51(self):
+        diff_h = self.Data['High'].diff(axis=0)
+        diff_l = self.Data['Low'].diff(axis=0)
+        cond1 = diff_h >= diff_l
+        cond2 = diff_h <= diff_l
+        temp = np.maximum(self.Data['High'].diff(axis=0).abs(),
+                          self.Data['Low'].diff(axis=0).abs())
+        s1 = (cond1*temp).rolling(12, axis=0).sum()
+        s2 = (cond2*temp).rolling(12, axis=0).sum()
+        return s2 / (s1+s2)
+    
+    @Output()
+    def Factor_GTJA_52(self):
+        m_3 = (self.Data['High']+self.Data['Low']+
+               self.Data['Close']).shift(axis=0)/3
+        temp1 = self.Data['High'] - m_3
+        temp1[temp1 < 0] = 0
+        temp2 = m_3 - self.Data['Low']
+        temp2[temp2 < 0] = 0
+        return temp1.rolling(26, axis=0).sum()/temp2.rolling(26, axis=0).sum()
+        
+    @Output()
+    def Factor_GTJA_53(self):
+        return (self.Data['Close'].diff(axis=0) > 0).rolling(12,
+               axis=0).sum() / 12
+    
+    @Output()
+    def Factor_GTJA_54(self):
+        temp = self.Data['Close'] - self.Data['Open']
+        return -(temp.abs().rolling(10, axis=0).std() +
+                 temp +
+                 self.TSCorr(self.Data['Close'], 
+                             self.Data['Open'], 10)).rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_55(self):
+        pass
+    
+    @Output()
+    def Factor_GTJA_56(self):
+        return ((self.TSCorr(((self.Data['High'] +
+                               self.Data['Low'])/2).rolling(19, axis=0).sum(),
+                self.Data['Volume'].rolling(40, axis=0).mean().rolling(19,
+                     axis=0).sum(), 13).rank(axis=1,
+                     pct=True)**5).rank(axis=1, pct=True) -
+                     (self.Data['Open'] -
+                      self.Data['Open'].rolling(12, 
+                               axis=0).min()).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_57(self):
+        min_l = self.Data['Low'].rolling(9, axis=0).min()
+        return ((self.Data['Close'] - min_l) /
+                (self.Data['High'].rolling(9, axis=0).max() -
+                 min_l)*100).ewm(alpha=1/3, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_58(self):
+        return (self.Data['Close'].diff(axis=0)>0).rolling(20, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_59(self):
+        s_c = self.Data['Close'].shift(axis=0)
+        d_c = self.Data['Close'].diff(axis=0)
+        return (self.Data['Close'] -
+                np.minimum(self.Data['Low'], s_c)*(d_c > 0) -
+                np.maximum(self.Data['High'], s_c)*(d_c < 0)).rolling(20,
+                          axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_60(self):
+        return ((self.Data['Close']*2 - self.Data['Low'] - self.Data['High'])/
+                (self.Data['High'] - self.Data['Low'])*
+                self.Data['Volume']).rolling(20, axis=0).sum()  
+    
+    @Output()
+    def Factor_GTJA_61(self):
+        temp1 = self.Data['VWAP'].diff(axis=0).rolling(12,
+                         axis=0).apply(lambda x:
+                             self.DecayLinear(x)).rank(axis=1, pct=True)
+        temp2 = self.TSCorr(self.Data['Low'], self.Data['Volume'].rolling(80, 
+                            axis=0).mean(), 8).rank(axis=1,
+            pct=True).rolling(17, axis=0).apply(lambda x:
+                self.DecayLinear(x)).rank(axis=1, pct=True)
+        return -np.maximum(temp1, temp2)
+        
+    @Output()
+    def Factor_GTJA_62(self):
+        return -self.TSCorr(self.Data['High'],
+                            self.Data['Volume'].rank(axis=1, pct=True),
+                            5)
+    
+    @Output()
+    def Factor_GTJA_63(self):
+        diff = self.Data['Close'].diff(axis=0)
+        p2 = diff.abs().ewm(alpha=1/6, axis=0).mean()
+        diff[diff < 0] = 0
+        p1 = diff.ewm(alpha=1/6, axis=0).mean()
+        return p1/p2*100
+    
+    @Output()
+    def Factor_GTJA_64(self):
+        temp1 = self.TSCorr(self.Data['VWAP'].rank(axis=1, pct=True), 
+                            self.Data['Volume'].rank(axis=1, pct=True),
+                            4).rolling(4, axis=0).apply(lambda x:
+                                self.DecayLinear(x)).rank(axis=1, pct=True)
+        temp2 = self.TSCorr(self.Data['Close'].rank(axis=1, pct=True), 
+                            self.Data['Volume'].rolling(60,
+                                     axis=0).mean().rank(axis=1, pct=True),
+                                     4).rolling(13, axis=0).max().rolling(14,
+                                               axis=0).apply(lambda x: 
+                                   self.DecayLinear(x)).rank(axis=1, pct=True)
+        return np.maximum(temp1, temp2)
+    
+    @Output()
+    def Factor_GTJA_65(self):
+        return self.Data['Close'].rolling(6, axis=0).mean()/self.Data['Close']
+        
+    @Output()
+    def Factor_GTJA_66(self):
+        return (self.Data['Close'] /
+                self.Data['Close'].rolling(6, axis=0).mean() - 1)
+    
+    @Output()
+    def Factor_GTJA_67(self):
+        diff = self.Data['Close'].diff(axis=0)
+        p2 = diff.abs().ewm(alpha=1/24, axis=0).mean()
+        diff[diff < 0] = 0
+        p1 = diff.ewm(alpha=1/24, axis=0).mean()
+        return p1/p2*100
+    
+    @Output()
+    def Factor_GTJA_68(self):
+        return ((self.Data['High'].diff(axis=0) + 
+                 self.Data['Low'].diff(axis=0))*
+                (self.Data['High'] -
+                 self.Data['Low'])/self.Data['Volume']).ewm(alpha=2/15,
+                 axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_69(self):
+        d_o = self.Data['Open'].diff(axis=0)
+        dtm = np.maximum(self.Data['High']-self.Data['Open'], d_o)*(d_o>0)
+        dbm = np.maximum(self.Data['Open']-self.Data['Low'], d_o)*(d_o<0)
+        s_dtm = dtm.rolling(20, axis=0).sum()
+        s_dbm = dbm.rolling(20, axis=0).sum()
+        return (1-s_dbm/s_dtm)*(s_dtm>s_dbm) + (s_dtm/s_dbm-1)*(s_dtm<s_dbm)
+        
+    @Output()
+    def Factor_GTJA_70(self):
+        return self.Data['Amount'].rolling(6, axis=0).std()
+    
+    @Output()
+    def Factor_GTJA_71(self):
+        return (self.Data['Close'] / 
+                self.Data['Close'].rolling(24, axis=0).mean() - 1)
+    
+    @Output()
+    def Factor_GTJA_72(self):
+        h_max = self.Data['High'].rolling(6, axis=0).max()
+        return ((h_max - self.Data['Close'])/
+                (h_max - self.Data['Low'].rolling(6,
+                 axis=0).min())).ewm(alpha=1/15, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_73(self):
+        return -(self.TSRank(self.TSCorr(self.Data['Close'], 
+                             self.Data['Volume'],
+                             10).rolling(16, axis=0).apply(lambda x:
+                                 self.DecayLinear(x)).rolling(4,
+                                                 axis=0).apply(lambda x:
+                     self.DecayLinear(x)), 5) -
+            self.TSCorr(self.Data['VWAP'], self.Data['Volume'].rolling(30, 
+                        axis=0).mean(), 4).rolling(3, axis=0).apply(lambda x:
+            self.DecayLinear(x)).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_74(self):
+        return self.TSCorr((self.Data['Low']*0.35 + 
+                            self.Data['VWAP']*0.65).rolling(20,
+                             axis=0).sum(), self.Data['Volume'].rolling(40, 
+                                        axis=0).mean().rolling(20,
+                                        axis=0).sum(), 7).rank(axis=1,
+            pct=True) + self.TSCorr(self.Data['VWAP'].rank(axis=1,
+                    pct=True), self.Data['Volume'].rank(axis=1,
+                            pct=True), 6).rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_75(self):
+        return (((self.Data['Close']>self.Data['Open']).mul(
+            self.Data['Index']<self.Data['IndexOpen'], axis=0)).rolling(50,
+                 axis=0).sum().div( 
+                (self.Data['Index']<self.Data['IndexOpen']).rolling(50, 
+                axis=0).sum(), axis=0))
+    
+    @Output()
+    def Factor_GTJA_76(self):
+        temp = (self.Data['Close'].pct_change(axis=0) /
+                self.Data['Volume']).rolling(20, axis=0)
+        return temp.std() / temp.mean()
+    
+    @Output()
+    def Factor_GTJA_77(self):
+        temp1 = ((self.Data['High'] + self.Data['Low'])/2 - 
+                 self.Data['VWAP']).rolling(20, axis=0).apply(lambda x: 
+                     self.DecayLinear(x)).rank(axis=1, pct=True)
+        temp2 = self.TSCorr((self.Data['High'] + self.Data['Low'])/2, 
+                            self.Data['Volume'].rolling(40,
+                                     axis=0).mean(), 3).rolling(6,
+                                     axis=0).apply(lambda x:
+                                 self.DecayLinear(x)).rank(axis=1, pct=True)
+        return np.minimum(temp1, temp2)
+    
+    @Output()
+    def Factor_GTJA_78(self):
+        temp = (self.Data['High'] + self.Data['Low'] + self.Data['Close'])/3
+        return ((temp - temp.rolling(12, axis=0).mean()) /
+                (0.015*(self.Data['Close'] - 
+                        temp.rolling(12, axis=0).mean()).abs().rolling(12,
+                                    axis=0).mean()))
+    
+    @Output()
+    def Factor_GTJA_79(self):
+        temp = self.Data['Close'].diff(axis=0)
+        return (temp.rolling(10, axis=0).max().ewm(alpha=1/12, axis=0).mean()/
+                temp.abs().ewm(alpha=1/12, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_80(self):
+        return self.Data['Volume'].pct_change(5, axis=0)*100
+    
+    @Output()
+    def Factor_GTJA_81(self):
+        return self.Data['Volume'].ewm(alpha=2/21).mean()
+    
+    @Output()
+    def Factor_GTJA_82(self):
+        h_max = self.Data['High'].rolling(6, axis=0).max()
+        return ((h_max - self.Data['Close'])/
+                (h_max - self.Data['Low'].rolling(6,
+                 axis=0).min())).ewm(alpha=1/20, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_83(self):
+        return -(self.TSCov(self.Data['High'].rank(axis=1, pct=True),
+                            self.Data['Volume'].rank(axis=1, pct=True),
+                            5).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_84(self):
+        return (self.Data['Volume'] *
+                (self.Data['Close'].diff(axis=0)>0) -
+                (self.Data['Volume'] *
+                 (self.Data['Close'].diff(axis=0)<=0))).rolling(20,
+                 axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_85(self):
+        return (self.TSRank(self.Data['Volume']/
+                            self.Data['Volume'].rolling(20, axis=0).mean(),
+                            20) *
+                self.TSRank(-self.Data['Close'].diff(7, axis=0), 8))
+    
+    @Output()
+    def Factor_GTJA_86(self):
+        d_10 = self.Data['Close'].shift(10, axis=0)
+        d_20 = self.Data['Close'].shift(20, axis=0)
+        temp = (d_20 - d_10 - d_10 + self.Data['Close'])/10
+        res = self.Data['Close'].diff(axis=0)
+        res[temp > 0.25] = -1.0
+        res[temp < 0] = 1.0
+        return res
+    
+    @Output()
+    def Factor_GTJA_87(self):
+        return (self.Data['VWAP'].diff(4, axis=0).rolling(7,
+                axis=0).apply(lambda x:
+                    self.DecayLinear(x)).rank(axis=1, pct=True) -
+            self.TSRank(((self.Data['Low'] - self.Data['VWAP'])/
+                         (self.Data['Open'] -
+                      (self.Data['High'] + self.Data['Low'])/2)).rolling(11,
+                        axis=0).apply(lambda x: self.DecayLinear(x)), 7))
+    
+    @Output()
+    def Factor_GTJA_88(self):
+        return self.Data['Close'].pct_change(20, axis=0)*100
+    
+    @Output()
+    def Factor_GTJA_89(self):
+        ema1 = self.Data['Close'].ewm(alpha=2/13, axis=0).mean()
+        ema2 = self.Data['Close'].ewm(alpha=2/27, axis=0).mean()
+        temp = ema1 - ema2
+        return 2*(temp - temp.ewm(alpha=0.2, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_90(self):
+        return -self.TSCorr(self.Data['VWAP'].rank(axis=1, pct=True), 
+                            self.Data['Volume'].rank(axis=1, pct=True),
+                            5).rank(axis=1, pct=True)
+
+    @Output()
+    def Factor_GTJA_91(self):
+        return -((self.Data['Close'] -
+                  self.Data['Close'].rolling(5, axis=0).max()).rank(axis=1,
+                           pct=True) * 
+            self.TSCorr(self.Data['Volume'].rolling(40, axis=0).mean(), 
+                        self.Data['Low'], 5).rank(axis=1, pct=True))
+       
+    @Output()
+    def Factor_GTJA_92(self):
+        r1 = (self.Data['Close']*0.35 +
+              self.Data['VWAP']*0.65).diff(2, axis=0).rolling(3,
+                       axis=0).apply(lambda x:
+                           self.DecayLinear(x)).rank(axis=1, pct=True)
+        r2 = self.TSRank(self.TSCorr(self.Data['Volume'].rolling(180,
+                                     axis=0).mean(),
+            self.Data['Close'], 13).abs().rolling(5, axis=0).apply(lambda x:
+                self.DecayLinear(x)), 5)
+        return -np.maximum(r1, r2)
+    
+    @Output()
+    def Factor_GTJA_93(self):
+        diff = self.Data['Open'].diff(axis=0)
+        return (np.maximum(self.Data['Open'] - 
+                           self.Data['Low'], diff) *
+            (diff < 0)).rolling(20, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_94(self):
+        return (self.Data['Volume'] *
+                (self.Data['Close'].diff(axis=0)>0) -
+                (self.Data['Volume'] *
+                 (self.Data['Close'].diff(axis=0)<=0))).rolling(30,
+                 axis=0).sum()
+            
+    @Output()
+    def Factor_GTJA_95(self):
+        return self.Data['Amount'].rolling(20, axis=0).std()
+    
+    @Output()
+    def Factor_GTJA_96(self):
+        l_min = self.Data['Low'].rolling(9, axis=0).min()
+        return ((self.Data['Close'] - l_min)/
+                (self.Data['High'] - l_min)*100).ewm(alpha=1/3,
+                axis=0).mean().ewm(alpha=1/3, axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_97(self):
+        return self.Data['Volume'].rolling(10, axis=0).std()
+    
+    @Output()
+    def Factor_GTJA_98(self):
+        res = -self.Data['Close'].diff(3, axis=0)
+        temp = (self.Data['Close'].rolling(100,
+                axis=0).mean().diff(100, axis=0) / 
+                self.Data['Close'].shift(100, axis=0))
+        res[temp <= 0.05] = (self.Data['Close'].rolling(100, axis=0).min() -
+                             self.Data['Close'])
+        return res
+    
+    @Output()
+    def Factor_GTJA_99(self):
+        return -(self.TSCov(self.Data['Close'].rank(axis=1, pct=True),
+                            self.Data['Volume'].rank(axis=1, pct=True),
+                            5).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_100(self):
+        return self.Data['Volume'].rolling(20, axis=0).std()
+    
+    @Output()
+    def Factor_GTJA_101(self):
+        return (-1*(self.TSCorr(self.Data['Close'], 
+                                self.Data['Volume'].rolling(30, 
+                                         axis=0).mean().rolling(37, 
+                             axis=0).sum(), 15).rank(axis=1, pct=True) <
+            self.TSCorr((self.Data['High']*0.1 +
+                         self.Data['VWAP']*0.9).rank(axis=1, pct=True),
+            self.Data['Volume'].rank(axis=1, pct=True),
+            11).rank(axis=1, pct=True))).rolling(10, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_102(self):
+        return (self.Data['Volume'].diff(axis=0).rolling(10, 
+                        axis=0).max().ewm(alpha=1/6, axis=0).mean() / 
+                        self.Data['Volume'].diff(axis=0).abs().ewm(alpha=1/6,
+                                 axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_103(self):
+        return 1 - self.Data['Low'].rolling(20, axis=0).apply(self.LowDay)/20
+    
+    @Output()
+    def Factor_GTJA_104(self):
+        return -(self.TSCorr(self.Data['High'],
+                             self.Data['Volume'], 5).diff(5, axis=0) *
+            self.Data['Close'].rolling(20,
+                     axis=0).std().rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_105(self):
+        return -(self.TSCorr(self.Data['Open'].rank(axis=1, pct=True), 
+                             self.Data['Volume'].rank(axis=1, pct=True),
+                             10))
+    
+    @Output()
+    def Factor_GTJA_108(self):
+        return -((self.Data['High'] -
+                  self.Data['High'].rolling(2, axis=0).min()).rank(axis=1,
+                           pct=True) ** 
+                     (self.TSCorr(self.Data['VWAP'],
+                                  self.Data['Volume'].rolling(120,
+                                       axis=0).mean(),
+                                        6).rank(axis=1, pct=True)))
+    
+    @Output()
+    def Factor_GTJA_110(self):
+        s_c = self.Data['Close'].shift(axis=0)
+        temp1 = self.Data['High'] - s_c
+        temp2 = s_c - self.Data['Low']
+        temp1[temp1 < 0] = 0.0
+        temp2[temp2 < 0] = 0.0
+        return (temp1.rolling(20, axis=0).sum() /
+                temp2.rolling(20, axis=0).sum())
+    
+    @Output()
+    def Factor_GTJA_111(self):
+        temp = ((self.Data['Close']*2 - self.Data['Low'] - self.Data['High']) *
+                self.Data['Volume']/(self.Data['High'] - self.Data['Low']))
+        return (temp.ewm(alpha=2/11, axis=0).mean() /
+                temp.ewm(alpha=0.5, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_113(self):
+        return -(self.Data['Close'].shift(5, axis=0).rolling(20, 
+                 axis=0).mean().rank(axis=1, pct=True) *
+            self.TSCorr(self.Data['Close'],
+                        self.Data['Volume'], 2) *
+                        self.TSCorr(self.Data['Close'].rolling(5,
+                                    axis=0).sum(), 
+            self.Data['Close'].rolling(20,
+                     axis=0).sum(), 2).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_114(self):
+        temp = ((self.Data['High'] - self.Data['Low'])/
+                self.Data['Close'].rolling(5, axis=0).mean())
+        return (temp.shift(2, axis=0).rank(axis=1, pct=True) *
+                self.Data['Volume'].rank(axis=1,
+                         pct=True).rank(axis=1, pct=True) /
+                         (temp/(self.Data['VWAP'] - self.Data['Close'])))
+    
+    @Output()
+    def Factor_GTJA_115(self):
+        return (self.TSCorr(self.Data['High']*0.9 +
+                            self.Data['Close']*0.1,
+                            self.Data['Volume'].rolling(30, axis=0).mean(),
+                            10) ** 
+                self.TSCorr(self.TSRank((self.Data['High'] + 
+                                         self.Data['Low'])/2, 4),
+                self.TSRank(self.Data['Volume'], 10),
+                7).rank(axis=1, pct=True))
+        
+    @Output()
+    def Factor_GTJA_117(self):
+        return (self.TSRank(self.Data['Volume'], 32) * 
+                (1 - self.TSRank(self.Data['Close']+self.Data['High']-
+                                 self.Data['Low'], 16)) * 
+                (1 - self.TSRank(self.Data['Close'].pct_change(axis=0), 32)))
+    
+    @Output()
+    def Factor_GTJA_118(self):
+        return ((self.Data['High'] - 
+                 self.Data['Open']).rolling(20, axis=0).sum() /
+                    (self.Data['Open'] - 
+                     self.Data['Low']).rolling(20, axis=0).sum())
+        
+    @Output()
+    def Factor_GTJA_119(self):
+        return (self.TSCorr(self.Data['VWAP'],
+                            self.Data['Volume'].rolling(5,
+                                     axis=0).mean().rolling(26,
+                                     axis=0).sum(), 5).rolling(7,
+                                     axis=0).apply(lambda x:
+               self.DecayLinear(x)).rank(axis=1, pct=True) -
+               (self.TSRank(self.TSCorr(self.Data['Open'].rank(axis=1,
+                                        pct=True), 
+                       self.Data['Volume'].rolling(15, 
+                                axis=0).mean().rank(axis=1,
+                                pct=True), 21).rolling(9,
+                                axis=0).min(), 7).rolling(8,
+                                axis=0).apply(lambda x: 
+                            self.DecayLinear(x))).rank(axis=1, pct=True))
+                           
+    @Output()
+    def Factor_GTJA_120(self):
+        r1 = (self.Data['VWAP'] - self.Data['Close']).rank(axis=1, pct=True)
+        r2 = (self.Data['VWAP'] + self.Data['Close']).rank(axis=1, pct=True)
+        return r1 / r2
+                    
+    @Output()
+    def Factor_GTJA_121(self):
+        bot = (self.Data['VWAP'] -
+               self.Data['VWAP'].rolling(12, 
+                        axis=0).min()).rank(axis=1, pct=True)
+        nor = self.TSRank(self.TSCorr(self.TSRank(self.Data['VWAP'], 20),
+                                  self.TSRank(self.Data['Volume'].rolling(60,
+                                              axis=0).mean(), 2), 18), 3)
+        return bot ** nor
+    
+    @Output()
+    def Factor_GTJA_122(self):
+        return (np.log(self.Data['Close']).ewm(alpha=2/13, 
+                axis=0).mean().ewm(alpha=2/13,
+                            axis=0).mean().ewm(alpha=2/13, 
+                                        axis=0).mean().pct_change(axis=0))
+    
+    @Output()
+    def Factor_GTJA_123(self):
+        return (self.TSCorr(((self.Data['High'] +
+                              self.Data['Low'])/2).rolling(20,
+            axis=0).sum(),
+            self.Data['Volume'].rolling(60, axis=0).mean().rolling(20,
+                     axis=0).sum(), 9).rank(axis=1, pct=True) -
+            self.TSCorr(self.Data['Low'],
+                        self.Data['Volume'], 6).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_124(self):
+        return ((self.Data['Close'] - self.Data['VWAP']) /
+                self.Data['Close'].rolling(30, axis=0).max().rank(axis=1,
+                         pct=True).rolling(2, axis=0).apply(lambda x:
+                             self.DecayLinear(x)))
+            
+    @Output()
+    def Factor_GTJA_125(self):
+        r1 = (self.TSCorr(self.Data['VWAP'],
+                          self.Data['Volume'].rolling(80, 
+                                   axis=0).mean(), 17).rolling(20,
+                                   axis=0).apply(lambda x: 
+                               self.DecayLinear(x)).rank(axis=1, pct=True))
+        r2 = (((self.Data['Close'] + 
+                self.Data['VWAP'])/2).diff(3, axis=0).rolling(16,
+                axis=0).apply(lambda x:
+                    self.DecayLinear(x)).rank(axis=1, pct=True))
+        return r1 / r2
+    
+    @Output()
+    def Factor_GTJA_126(self):
+        return (self.Data['Close'] + self.Data['High'] + self.Data['Low'])/3
+    
+    @Output()
+    def Factor_GTJA_127(self):
+        m_c = self.Data['Close'].rolling(12, axis=0).max()
+        return np.sqrt((((self.Data['Close']/m_c
+                          - 1)*100)**2).rolling(12, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_128(self):
+        temp = (self.Data['Close'] + self.Data['High'] + self.Data['Low'])/3
+        res = temp*self.Data['Volume']
+        res1 = res.copy()
+        res1[temp.diff(axis=0)<0] = 0
+        res2 = res.copy()
+        res2[temp.diff(axis=0)>0] = 0
+        return (100 - (100/(1 + res1.rolling(14, axis=0).sum() /
+                            res2.rolling(14, axis=0).sum())))
+        
+    @Output()
+    def Factor_GTJA_129(self):
+        temp = -self.Data['Close'].diff(axis=0)
+        temp[temp < 0] = 0
+        return temp.rolling(12, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_130(self):
+        r1 = (self.TSCorr((self.Data['High'] + self.Data['Low'])/2, 
+                          self.Data['Volume'].rolling(40, 
+                                   axis=0).mean(), 9).rolling(10, 
+                                   axis=0).apply(lambda x: 
+                       self.DecayLinear(x)).rank(axis=1, pct=True))
+        r2 = (self.TSCorr(self.Data['VWAP'].rank(axis=1, pct=True), 
+                          self.Data['Volume'].rank(axis=1,
+                                   pct=True), 7).rolling(3, 
+                                   axis=0).apply(lambda x: 
+                       self.DecayLinear(x)).rank(axis=1, pct=True))
+        return r1 / r2
+
+    @Output()
+    def Factor_GTJA_131(self):
+        bot = self.Data['VWAP'].diff(axis=0).rank(axis=1, pct=True)
+        nor = self.TSRank(self.TSCorr(self.Data['Close'], 
+                                      self.Data['Volume'].rolling(50,
+                                               axis=0).mean(), 18), 18)
+        return bot ** nor
+    
+    @Output()
+    def Factor_GTJA_132(self):
+        return self.Data['Amount'].rolling(20, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_133(self):
+        return ((20 - self.Data['High'].rolling(20,
+                axis=0).apply(self.HighDay))/20 - 
+                (20 - self.Data['Low'].rolling(20,
+                 axis=0).apply(self.LowDay))/20)
+    
+    @Output()
+    def Factor_GTJA_134(self):
+        return self.Data['Volume']*self.Data['Close'].pct_change(12, axis=0)
+    
+    @Output()
+    def Factor_GTJA_135(self):
+        return (self.Data['Close'] / self.Data['Close'].shift(20, 
+                         axis=0)).shift(axis=0).ewm(alpha=0.05,
+                         axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_136(self):
+        return -(self.TSCorr(self.Data['Open'],
+                             self.Data['Volume'], 10) * 
+            self.Data['Close'].pct_change(axis=0).diff(3, axis=0))
+        
+    @Output()
+    def Factor_GTJA_137(self):
+        pass
+    
+    @Output()
+    def Factor_GTJA_138(self):
+        r1 = (self.Data['Low']*0.7 +
+              self.Data['VWAP']*0.3).diff(3, axis=0).rolling(20,
+                       axis=0).apply(lambda x:
+                           self.DecayLinear(x)).rank(axis=1, pct=True)
+            
+        r2 = self.TSRank(self.TSCorr(self.TSRank(self.Data['Close'], 8), 
+                                 self.TSRank(self.Data['Volume'].rolling(60, 
+                                             axis=0).mean(), 20),
+                                     8).rolling(7, axis=0).apply(lambda x:
+                                         self.DecayLinear(x)), 3)    
+        return np.minimum(r1, r2)
+    
+    @Output()
+    def Factor_GTJA_139(self):
+        return -self.TSCorr(self.Data['Open'], self.Data['Volume'], 10)
+    
+    @Output()
+    def Factor_GTJA_140(self):
+        r1 = (self.Data['Open'].rank(axis=1, pct=True) +
+              self.Data['Low'].rank(axis=1, pct=True) - 
+              self.Data['High'].rank(axis=1, pct=True) -
+              self.Data['Close'].rank(axis=1, pct=True)).rolling(8, 
+                       axis=0).apply(lambda x: 
+                           self.DecayLinear(x)).rank(axis=1, pct=True)
+        r2 = self.TSRank(self.TSCorr(self.TSRank(self.Data['Close'], 8),
+                                     self.TSRank(self.Data['Volume'], 60),
+                                     20).rolling(8, axis=0).apply(lambda x: 
+                                         self.DecayLinear(x)), 3)
+        return np.minimum(r1, r2)
+    
+    @Output()
+    def Factor_GTJA_141(self):
+        return -self.TSCorr(self.Data['High'].rank(axis=1, pct=True), 
+                            self.Data['Volume'].rolling(15, axis=0).mean(),
+                            9)
+        
+    @Output()
+    def Factor_GTJA_142(self):
+        return (self.TSRank(self.Data['Close'], 10).rank(axis=1, pct=True) *
+                self.Data['Close'].diff(axis=0).diff(axis=0).rank(axis=1,
+                         pct=True) * 
+                self.TSRank(self.Data['Volume']/
+                            self.Data['Volume'].rolling(20,
+                                 axis=0).mean(), 5).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_143(self):
+        temp = self.Data['Close'].pct_change(axis=0) + 1
+        temp[temp < 1] = 1
+        return temp.rolling(21, axis=0).apply(lambda x: x.prod())
+    
+    @Output()
+    def Factor_GTJA_144(self):
+        temp = self.Data['Close'].pct_change(axis=0)
+        temp[temp > 0] = 0
+        res1 = temp.abs().rolling(20, axis=0).sum()
+        res2 = (temp > 0).rolling(20, axis=0).sum()
+        return res1 / (1 + res2)
+    
+    @Output()
+    def Factor_GTJA_145(self):
+        return ((self.Data['Volume'].rolling(9, axis=0).mean() -
+                 self.Data['Volume'].rolling(26, axis=0).mean()) /
+                    self.Data['Volume'].rolling(12, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_146(self):
+        temp = self.Data['Close'].pct_change(axis=0)
+        s1 = temp - temp.ewm(alpha=1/31, axis=0).mean()
+        return (s1.rolling(20, axis=0).mean() * s1 /
+                ((temp - s1)**2).rolling(60, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_147(self):
+        return self.RegBeta(self.Data['Close'].rolling(12, axis=0).mean(),
+                            np.arange(12)+1)
+    
+    @Output()
+    def Factor_GTJA_148(self):
+        r1 = self.TSCorr(self.Data['Open'],
+                         self.Data['Volume'].rolling(60,
+                                  axis=0).mean().rolling(9, axis=0).sum(),
+                                  6).rank(axis=1, pct=True)
+        r2 = (self.Data['Open'] -
+              self.Data['Open'].rolling(14,
+                       axis=0).min()).rank(axis=1, pct=True)
+        return r1 - r2
+    
+    @Output()
+    def Factor_GTJA_149(self):
+        ret = self.Data['Close'].pct_change(axis=0)
+        ret_i = self.Data['Index'].pct_change(axis=0)
+        ret[ret_i > 0] = np.nan
+        return self.RegBeta(ret, ret_i)
+    
+    @Output()
+    def Factor_GTJA_150(self):
+        return (self.Data['Close'] + 
+                self.Data['High'] + 
+                self.Data['Low'])*self.Data['Volume']
+        
+    @Output()
+    def Factor_GTJA_151(self):
+        return self.Data['Close'].diff(20, 
+                        axis=0).ewm(alpha=0.05, axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_152(self):
+        temp = (self.Data['Close'] /
+                self.Data['Close'].shift(9,
+                         axis=0)).shift(axis=0).ewm(alpha=1/9,
+                         axis=0).mean().shift(axis=0)
+        return (temp.rolling(12, axis=0).mean() -
+                temp.rolling(26, axis=0).mean()).ewm(alpha=1/9, axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_153(self):
+        return (self.Data['Close'].rolling(3, axis=0).mean() +
+                self.Data['Close'].rolling(6, axis=0).mean() +
+                self.Data['Close'].rolling(12, axis=0).mean() +
+                self.Data['Close'].rolling(24, axis=0).mean())/4
+    
+    @Output()
+    def Factor_GTJA_154(self):
+        return (self.TSCorr(self.Data['VWAP'], 
+                            self.Data['Volume'].rolling(180,
+                                     axis=0).mean(), 18) /
+            (self.Data['VWAP'] - self.Data['VWAP'].rolling(16, axis=0).min()))
+        
+    @Output()
+    def Factor_GTJA_155(self):
+        temp = (self.Data['Volume'].ewm(alpha=2/13, axis=0).mean() -
+                self.Data['Volume'].ewm(alpha=2/27, axis=0).mean())
+        return temp - temp.ewm(alpha=0.5, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_156(self):
+        r1 = self.Data['VWAP'].diff(5, axis=0).rolling(3,
+                      axis=0).apply(lambda x: 
+                          self.DecayLinear(x)).rank(axis=1, pct=True)
+        r2 = (-(self.Data['Open']*0.15 + 
+                self.Data['Low']*0.85).diff(2, axis=0) / 
+            (self.Data['Open']*0.15 +
+             self.Data['Low']*0.85)).rolling(3, axis=0).apply(lambda x:
+                self.DecayLinear(x)).rank(axis=1, pct=True)
+        return -np.maximum(r1, r2)
+    
+    @Output()
+    def Factor_GTJA_157(self):
+        p1 = (1 - np.log((2 - self.Data['Close'].diff(5,
+                          axis=0).rank(axis=1, pct=True)).rolling(2, 
+            axis=0).min()).rank(axis=1, pct=True)).rolling(5, axis=0).min()
+        p2 = self.TSRank(-self.Data['Close'].pct_change(axis=0).shift(6,
+                         axis=0), 5)
+        return p1 + p2
+    
+    @Output()
+    def Factor_GTJA_158(self):
+        temp = self.Data['Close'].ewm(alpha=2/15, axis=0).mean()
+        return (self.Data['High']  - self.Data['Low'] -
+                2*temp)/self.Data['Close'] 
+        
+    @Output()
+    def Factor_GTJA_159(self):
+        p1 = ((self.Data['Close'] -
+               self.Data['Low'].rolling(6, axis=0).sum())/
+            (self.Data['Close'].shift(axis=0) -
+             self.Data['Low']).rolling(6, axis=0).sum()*12*24)
+        p2 = ((self.Data['Close'] -
+               self.Data['Low'].rolling(12, axis=0).sum())/
+            (self.Data['Close'].shift(axis=0) -
+             self.Data['Low']).rolling(12, axis=0).sum()*6*24)
+        p3 = ((self.Data['Close'] -
+               self.Data['Low'].rolling(24, axis=0).sum())/
+            (self.Data['Close'].shift(axis=0) -
+             self.Data['Low']).rolling(24, axis=0).sum()*12*24)
+        return (p1 + p2 + p3)/(100/(6*12 + 12*24 + 6*24))
+    
+    @Output()
+    def Factor_GTJA_160(self):
+        temp = self.Data['Close'].rolling(20, axis=0).std()
+        temp[self.Data['Close'].diff(axis=0) > 0] = 0
+        return temp.ewm(alpha=0.05, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_161(self):
+        return np.maximum(np.maximum(self.Data['High'] - self.Data['Low'], 
+                                     (self.Data['Close'].shift(axis=0) - 
+                                      self.Data['High']).abs()),
+            (self.Data['Close'].shift(axis=0) - 
+             self.Data['High']).abs()).rolling(12, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_162(self):
+        diff = self.Data['Close'].diff(axis=0)
+        temp = (diff.ewm(alpha=1/12, axis=0).mean() /
+                diff.abs().ewm(alpha=1/12, axis=0).mean())
+        t_min = temp.rolling(12, axis=0).min()
+        return (temp - t_min)/(temp.rolling(12, axis=0).max() - t_min)
+    
+    @Output()
+    def Factor_GTJA_163(self):
+        return (-self.Data['Close'].pct_change(axis=0) * 
+                self.Data['Volume'].rolling(20, axis=0).mean() * 
+                self.Data['VWAP']*(self.Data['High'] -
+                         self.Data['Close'])).rank(axis=1, pct=True)
+    
+    @Output()
+    def Factor_GTJA_164(self):
+        temp = 1/self.Data['Close'].diff(axis=0)
+        temp[temp < 0] = 1
+        return (temp - temp.rolling(12, axis=0).min()/
+                (self.Data['High'] -
+                 self.Data['Low'])*100).ewm(alpha=2/13, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_165(self):
+        pass
+    
+    @Output()
+    def Factor_GTJA_166(self):
+        ret = self.Data['Close'].pct_change(axis=0)
+        return ((ret -
+                 ret.rolling(20, axis=0).mean()).rolling(20,
+                            axis=0).sum()/
+            ((self.Data['Close']/
+              self.Data['Close'].shift(axis=0)).rolling(20, 
+                       axis=0).sum()**2)).rolling(20, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_167(self):
+        res = self.Data['Close'].diff(axis=0)
+        res[res > 0] = 0
+        return res.rolling(12, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_168(self):
+        return (-self.Data['Volume'] / 
+                self.Data['Volume'].rolling(20, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_169(self):
+        temp = self.Data['Close'].diff(axis=0).ewm(alpha=1/9,
+                        axis=0).mean().shift(axis=0)
+        return (temp.rolling(12, axis=0).mean() - 
+                temp.rolling(26, axis=0).mean()).ewm(alpha=0.1, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_170(self):
+        return ((1 - self.Data['Close'].rank(axis=1, pct=True)) *
+                self.Data['Volume'] /
+                self.Data['Volume'].rolling(20, axis=0).mean() *
+                (self.Data['High'] *
+                 (self.Data['High'] -
+                  self.Data['Low']).rank(axis=1, pct=True)) /
+                 (self.Data['High'].rolling(5, axis=0).mean()) -
+                 self.Data['VWAP'].diff(5, axis=0).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_171(self):
+        return ((self.Data['Close'] - self.Data['Low']) *
+                (self.Data['Open'] ** 5) / 
+                (self.Data['Close'] - self.Data['High']) /
+                (self.Data['Close'] ** 5))
+    
+    @Output()
+    def Factor_GTJA_172(self):
+        HD = self.Data['High'].diff(axis=0)
+        LD = -self.Data['Low'].diff(axis=0)
+        LD[~((LD > 0) & (LD > HD))] = 0
+        HD[~((HD > 0) & (HD > LD))] = 0
+        temp1 = self.Data['High'] - self.Data['Low']
+        temp2 = (self.Data['High'] - self.Data['Close'].shift(axis=0)).abs()
+        t_mask = temp1 < temp2
+        temp1[t_mask] = temp2
+        temp2 = (self.Data['Low'] - self.Data['Close'].shift(axis=0)).abs()
+        t_mask = temp1 < temp2
+        temp1[t_mask] = temp2
+        s_TR = temp1.rolling(14, axis=0).sum()
+        p1 = LD.rolling(14, axis=0).sum() / s_TR
+        p2 = HD.rolling(14, axis=0).sum() / s_TR
+        return ((p1 - p2).abs() / (p1 + p2)).rolling(6, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_173(self):
+        s_c = self.Data['Close'].ewm(alpha=2/13, axis=0).mean()
+        s_c_w = s_c.ewm(alpha=2/13, axis=0).mean()
+        return 3*s_c - 2*s_c_w + s_c_w.ewm(alpha=2/13, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_174(self):
+        res = self.Data['Close'].rolling(20, axis=0).std()
+        res[self.Data['Close'].diff(axis=0) < 0] = 0
+        return res.ewm(alpha=0.05, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_175(self):
+        return (np.maximum(np.maximum(self.Data['High'] - self.Data['Low'],
+                                      (self.Data['Close'].shift(axis=0) - 
+                                       self.Data['High']).abs()), 
+                (self.Data['Close'].shift(axis=0) -
+                 self.Data['Low']).abs()).rolling(6, axis=0).mean())
+    
+    @Output()
+    def Factor_GTJA_176(self):
+        l_min = self.Data['Low'].rolling(12, axis=0).min()
+        return self.TSCorr(((self.Data['Close'] - l_min)/
+                            (self.Data['Low'].rolling(12, axis=0).max() -
+                             l_min)).rank(axis=1, pct=True),
+            self.Data['Volume'].rank(axis=1, pct=True), 6)
+    
+    @Output()
+    def Factor_GTJA_177(self):
+        return (20 -
+                self.Data['High'].rolling(20, axis=0).apply(self.HighDay))/20
+    
+    @Output()
+    def Factor_GTJA_178(self):
+        return self.Data['Close'].pct_change(axis=0) * self.Data['Volume']
+    
+    @Output()
+    def Factor_GTJA_179(self):
+        return (self.TSCorr(self.Data['VWAP'],
+                            self.Data['Volume'], 
+                            4).rank(axis=1, pct=True) *
+                        self.TSCorr(self.Data['Low'].rank(axis=1, pct=True),
+                        self.Data['Volume'].rolling(50, 
+                                 axis=0).mean().rank(axis=1, pct=True),
+                                 12).rank(axis=1, pct=True))
+    
+    @Output()
+    def Factor_GTJA_180(self):
+        res = -self.Data['Volume']
+        res[self.Data['Volume'].rolling(20, axis=0).mean() <
+            self.Data['Volume']] = -self.TSRank(self.Data['Close'].diff(7,
+            axis=0).abs(), 60) * (2 *
+            ((self.Data['Close'].diff(7, axis=0) > 0) - 0.5))
+    
+    @Output()
+    def Factor_GTJA_181(self):
+        ret = self.Data['Close'].pct_change(axis=0)
+        return ret - ret.rolling(20, axis=0).mean()
+    
+    @Output()
+    def Factor_GTJA_182(self):
+        d1 = self.Data['Close'] - self.Data['Open']
+        d2 = self.Data['Index'] - self.Data['IndexOpen']
+        return (((d1 > 0).mul(d2 > 0, axis=0)) |
+                ((d1 < 0).mul(d2 < 0, axis=0))).rolling(20, axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_183(self):
+        pass
+    
+    @Output()
+    def Factor_GTJA_184(self):
+        temp = self.Data['Open'] - self.Data['Close']
+        r1 = self.TSCorr(temp.shift(axis=0),
+                         self.Data['Close'], 200).rank(axis=1, pct=True)
+        r2 = temp.rank(axis=1, pct=True)
+        return r1 + r2
+    
+    @Output()
+    def Factor_GTJA_185(self):
+        return 1 -((1 - self.Data['Open'] / 
+                    self.Data['Close'])**2).rank(axis=1, pct=True)
+        
+    @Output()
+    def Factor_GTJA_186(self):
+        HD = self.Data['High'].diff(axis=0)
+        LD = -self.Data['Low'].diff(axis=0)
+        LD[~((LD > 0) & (LD > HD))] = 0
+        HD[~((HD > 0) & (HD > LD))] = 0
+        temp1 = self.Data['High'] - self.Data['Low']
+        temp2 = (self.Data['High'] - self.Data['Close'].shift(axis=0)).abs()
+        t_mask = temp1 < temp2
+        temp1[t_mask] = temp2
+        temp2 = (self.Data['Low'] - self.Data['Close'].shift(axis=0)).abs()
+        t_mask = temp1 < temp2
+        temp1[t_mask] = temp2
+        s_TR = temp1.rolling(14, axis=0).sum()
+        p1 = LD.rolling(14, axis=0).sum() / s_TR
+        p2 = HD.rolling(14, axis=0).sum() / s_TR
+        res = ((p1 - p2).abs() / (p1 + p2)).rolling(6, axis=0).mean()
+        return res + res.shift(6, axis=0)
+    
+    @Output()
+    def Factor_GTJA_187(self):
+        res = np.maximum(self.Data['High'] - self.Data['Open'],
+                         self.Data['Open'].diff(axis=0))
+        res[self.Data['Open'].diff(axis=0) <= 0] = 0
+        return res.rolling(20, axis=0).sum()
+    
+    @Output()
+    def Factor_GTJA_188(self):
+        temp = self.Data['High'] - self.Data['Low']
+        s_t = temp.ewm(alpha=2/11, axis=0).mean()
+        return temp / s_t - 1
+    
+    @Output()
+    def Factor_GTJA_189(self):
+        return self.Data['Close'].diff(6, 
+                        axis=0).abs().rolling(6, axis=0).mean()
+        
+    @Output()
+    def Factor_GTJA_190(self):
+        ret = self.Data['Close'].pct_change(axis=0)
+        temp1 = (self.Data['Close']/
+                 self.Data['Close'].shift(19, axis=0))**0.05 - 1
+        p11 = (ret > temp1).rolling(20, axis=0).sum()
+        p12 = (ret < temp1).rolling(20, axis=0).sum()
+        diff = ret - temp1
+        p2 = diff.copy()
+        p2[p2 > 0] = 0
+        p2 = p2.rolling(20, axis=0).sum()
+        p3 = diff.copy()
+        p3[p3 < 0] = 0
+        p3 = p3.rolling(20, axis=0).sum()
+        return p11 * p2 / p12 / p3
+    
+    @Output()
+    def Factor_GTJA_191(self):
+        return self.TSCorr(self.Data['Volume'].rolling(20, axis=0).mean(),
+                           self.Data['Low'], 5) + 0.5*(self.Data['High'] + 
+                                    self.Data['Low']) - self.Data['Close']
+                

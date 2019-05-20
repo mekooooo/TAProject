@@ -14,7 +14,7 @@ if __name__ == '__main__':
     data_dir = ''
     factor_dir = '{}'.format(data_dir)
     TA = TechnicalAnalysis(output=factor_dir)
-
+    
 #    TA.Factor_STO_TRIX.__code__.co_varnames[1:TA.Factor_STO_TRIX.__code__.co_argcount]
     temp = TA.Factor_ADX(window = 5, rolling = 5)
     temp = TA.Factor_ADX(window = 5, rolling = 10)
@@ -184,3 +184,25 @@ if __name__ == '__main__':
     temp = TA.Factor_std2(window=21, rolling=66)
     temp = TA.Factor_std2(window=66, rolling=21)
     temp = TA.Factor_std2(window=66, rolling=66)
+    temp = TA.NightGap(rolling=3)
+    temp = TA.NightGap(rolling=10)
+    temp = TA.NightGap(rolling=22)
+
+
+    for func in [getattr(TA, x) for x in dir(TA) if 'GTJA' in x]:
+        temp = func()
+    temp = TA.Factor_GTJA_116()
+    temp = TA.Factor_GTJA_117()
+    temp = TA.Factor_GTJA_121()
+    temp = TA.Factor_GTJA_131()
+    temp = TA.Factor_GTJA_138()
+    temp = TA.Factor_GTJA_140()
+    temp = TA.Factor_GTJA_144()
+    temp = TA.Factor_GTJA_147()
+    temp = TA.Factor_GTJA_149()
+    temp = TA.Factor_GTJA_157()
+    temp = TA.Factor_GTJA_21()
+    temp = TA.Factor_GTJA_44()
+    
+    
+    
