@@ -191,18 +191,6 @@ if __name__ == '__main__':
 
     for func in [getattr(TA, x) for x in dir(TA) if 'GTJA' in x]:
         temp = func()
-    temp = TA.Factor_GTJA_116()
-    temp = TA.Factor_GTJA_117()
-    temp = TA.Factor_GTJA_121()
-    temp = TA.Factor_GTJA_131()
-    temp = TA.Factor_GTJA_138()
-    temp = TA.Factor_GTJA_140()
-    temp = TA.Factor_GTJA_144()
-    temp = TA.Factor_GTJA_147()
-    temp = TA.Factor_GTJA_149()
-    temp = TA.Factor_GTJA_157()
-    temp = TA.Factor_GTJA_21()
-    temp = TA.Factor_GTJA_44()
-    
+
     
     

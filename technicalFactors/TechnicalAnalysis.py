@@ -1658,7 +1658,7 @@ class TechnicalAnalysis(TechnicalIndicators):
         p2 = diff.abs().ewm(alpha=1/6, axis=0).mean()
         diff[diff < 0] = 0
         p1 = diff.ewm(alpha=1/6, axis=0).mean()
-        return p1/p2*100
+        return -p1/p2*100
     
     @Output()
     def Factor_GTJA_64(self):
